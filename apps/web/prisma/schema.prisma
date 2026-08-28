@@ -1,0 +1,275 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// === Core Tenant Model ===
+model Business {
+  id                String   @id @default(cuid())
+  clerkOrgId        String   @unique
+  name              String
+  phone             String
+  email             String
+  address           String?
+  timezone          String   @default("America/New_York")
+  hours             Json?    // {monday: {open: "08:00", close: "17:00"}, ...}
+  services          Service[]
+
+  // Voice config
+  greetingScript    String   @default("Hello! You've reached {{businessName}}. I'm your AI assistant. How can I help you today?")
+  voiceStyle        String   @default("friendly-professional")
+  holdMessage       String   @default("Please hold while I check our schedule.")
+
+  // Calendar
+  googleCalendarId  String?
+  googleRefreshToken String? // Encrypted
+  calendlyToken     String? // Encrypted
+
+  // Billing
+  stripeCustomerId  String?
+  stripeSubscriptionId String?
+  plan              Plan     @default(STARTER)
+  planStatus        SubscriptionStatus @default(TRIALING)
+  trialEndsAt       DateTime?
+
+  // Usage tracking (monthly)
+  currentPeriodStart DateTime @default(now())
+  currentPeriodEnd   DateTime @default(now())
+  callsThisPeriod    Int      @default(0)
+  overageCalls       Int      @default(0)
+
+  // Add-ons
+  reviewAddonEnabled Boolean  @default(false)
+
+  // Relations
+  calls             Call[]
+  bookings          Booking[]
+  users             BusinessUser[]
+  notifications     Notification[]
+
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  @@index([clerkOrgId])
+  @@index([stripeCustomerId])
+  @@index([planStatus])
+}
+
+model BusinessUser {
+  id          String   @id @default(cuid())
+  businessId  String
+  business    Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  clerkUserId String   @unique
+  email       String
+  name        String?
+  role        UserRole @default(OWNER)
+  phone       String?  // For SMS summaries
+  notifySms   Boolean  @default(true)
+  notifyEmail Boolean  @default(true)
+  createdAt   DateTime @default(now())
+
+  @@index([businessId])
+  @@index([clerkUserId])
+}
+
+model Service {
+  id          String   @id @default(cuid())
+  businessId  String
+  business    Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  name        String   // "AC Repair", "Drain Cleaning"
+  description String?
+  priceRange  Json?    // {min: 150, max: 400}
+  duration    Int      @default(60) // minutes
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+
+  @@index([businessId])
+}
+
+// === Call & Conversation ===
+model Call {
+  id              String     @id @default(cuid())
+  businessId      String
+  business        Business   @relation(fields: [businessId], references: [id], onDelete: Cascade)
+
+  // Twilio metadata
+  twilioCallSid   String     @unique
+  fromNumber      String
+  toNumber        String
+  direction       CallDirection @default(INBOUND)
+
+  // Call details
+  status          CallStatus @default(RINGING)
+  startedAt       DateTime   @default(now())
+  endedAt         DateTime?
+  duration        Int?       // seconds
+  recordingUrl    String?
+  recordingDuration Int?
+
+  // AI conversation
+  transcript      String?    @db.Text
+  summary         String?    @db.Text
+  serviceMentioned String?
+  addressMentioned String?
+  urgency         Urgency    @default(UNKNOWN)
+  budgetMentioned String?
+
+  // Outcome
+  outcome         CallOutcome @default(PENDING)
+  bookingId       String?    @unique
+  booking         Booking?   @relation(fields: [bookingId], references: [id])
+  revenue         Decimal?   @db.Decimal(10, 2)
+
+  // Qualification data
+  qualified       Boolean    @default(false)
+  qualificationData Json?
+
+  // Cost tracking
+  aiCost          Decimal?   @db.Decimal(10, 4)
+  telephonyCost   Decimal?   @db.Decimal(10, 4)
+
+  createdAt       DateTime   @default(now())
+  updatedAt       DateTime   @updatedAt
+
+  @@index([businessId])
+  @@index([twilioCallSid])
+  @@index([status])
+  @@index([outcome])
+  @@index([createdAt])
+}
+
+model Booking {
+  id              String   @id @default(cuid())
+  businessId      String
+  business        Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  callId          String?  @unique
+  call            Call?    @relation(name: "BookingCall")
+
+  // Customer
+  customerName    String?
+  customerPhone   String
+  customerEmail   String?
+  customerAddress String?
+
+  // Service details
+  serviceName     String
+  serviceId       String?
+  notes           String?  @db.Text
+
+  // Scheduling
+  scheduledDate   DateTime
+  duration        Int      @default(60)
+  status          BookingStatus @default(CONFIRMED)
+
+  // Calendar sync
+  googleEventId   String?
+  calendlyEventId String?
+
+  // Revenue
+  estimatedRevenue Decimal? @db.Decimal(10, 2)
+  actualRevenue    Decimal? @db.Decimal(10, 2)
+
+  // Review request
+  reviewRequested  Boolean  @default(false)
+  reviewSentAt     DateTime?
+  reviewReceived   Boolean  @default(false)
+  reviewRating     Int?
+
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  @@index([businessId])
+  @@index([scheduledDate])
+  @@index([status])
+}
+
+model Notification {
+  id          String   @id @default(cuid())
+  businessId  String
+  business    Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  type        NotificationType
+  title       String
+  body        String
+  data        Json?
+  read        Boolean  @default(false)
+  sentAt      DateTime @default(now())
+
+  @@index([businessId])
+  @@index([read])
+}
+
+// === Enums ===
+enum Plan {
+  STARTER
+  PROFESSIONAL
+  ENTERPRISE
+}
+
+enum SubscriptionStatus {
+  TRIALING
+  ACTIVE
+  PAST_DUE
+  CANCELED
+  UNPAID
+}
+
+enum UserRole {
+  OWNER
+  ADMIN
+  MEMBER
+}
+
+enum CallDirection {
+  INBOUND
+  OUTBOUND
+}
+
+enum CallStatus {
+  RINGING
+  IN_PROGRESS
+  COMPLETED
+  FAILED
+  BUSY
+  NO_ANSWER
+  VOICEMAIL
+}
+
+enum Urgency {
+  UNKNOWN
+  LOW
+  MEDIUM
+  HIGH
+  EMERGENCY
+}
+
+enum CallOutcome {
+  PENDING
+  BOOKED
+  QUALIFIED
+  MISSED
+  SPAM
+  VOICEMAIL
+  TRANSFERRED
+  CALLBACK_REQUESTED
+}
+
+enum BookingStatus {
+  PENDING
+  CONFIRMED
+  COMPLETED
+  CANCELED
+  NO_SHOW
+}
+
+enum NotificationType {
+  CALL_SUMMARY
+  BOOKING_CONFIRMED
+  OVERAGE_WARNING
+  PAYMENT_FAILED
+  REVIEW_REQUESTED
+  SYSTEM_ALERT
+}

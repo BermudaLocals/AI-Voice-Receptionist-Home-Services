@@ -1,0 +1,25 @@
+{
+  "name": "@receptionai/voice-engine",
+  "version": "1.0.0",
+  "private": true,
+  "main": "./dist/server.js",
+  "types": "./dist/server.d.ts",
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsx src/server.ts",
+    "start": "node dist/server.js"
+  },
+  "dependencies": {
+    "ws": "^8.16.0",
+    "@deepgram/sdk": "^3.2.0",
+    "openai": "^4.40.0",
+    "twilio": "^5.0.0",
+    "ioredis": "^5.4.1"
+  },
+  "devDependencies": {
+    "@types/ws": "^8.5.10",
+    "@types/node": "^20.12.0",
+    "tsx": "^4.9.0",
+    "typescript": "^5.4.5"
+  }
+}
